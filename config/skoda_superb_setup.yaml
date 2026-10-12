@@ -1,0 +1,160 @@
+# Camera sensor setup visualisation config.
+#
+# Vehicle frame (ISO 8855): origin = rear axle centre on the ground,
+#   x forward, y left, z up, metres.
+# Camera orientation: yaw  [deg] positive = turn left (CCW seen from above), 0 = forward
+#                     pitch[deg] positive = look up, negative = look down
+#                     roll [deg] around the optical axis
+# projection: pinhole | fisheye  (fisheye = equidistant model, r = f * theta)
+# A camera takes its specs from `camera_models[camera_model]`; any field can be overridden per camera.
+# vfov_deg is optional: derived from the aspect ratio if omitted.
+# max_range_m is optional: caps the resolution-derived ranges (e.g. lens/ISP limit).
+
+vehicle:
+  name: "Skoda Superb (B9, 2024)"
+  length_m: 4.902
+  width_m: 1.849          # without mirrors
+  height_m: 1.481
+  wheelbase_m: 2.841
+  front_overhang_m: 0.935
+  mirror_width_m: 2.08     # incl. mirrors
+  mirror_x_m: 1.75         # mirror position along x
+
+# Resolution -> range: the distance at which a pedestrian still spans
+# `min_pixels` vertical pixels (Johnson-style criteria). Sizes from camera_calc.xlsx.
+range_criteria:
+  target_height_m: 1.75   # pedestrian
+  target_width_m: 0.65
+  tiers:
+    - { name: detection,      min_pixels: 20 }
+    - { name: recognition,    min_pixels: 50 }
+    - { name: identification, min_pixels: 120 }
+
+# ---------------------------------------------------------------------------
+# Camera models (specs). Placements below refer to these by key.
+# ---------------------------------------------------------------------------
+camera_models:
+  long_range_24:
+    model: "SENSING SG17-IMX735C-G3A"          # source: Presentation 1.pptx, camera_calc.xlsx
+    sensor: "Sony IMX735, 17.4 MP, RGGB"
+    resolution: [5760, 3000]
+    hfov_deg: 24
+    vfov_deg: 16.2
+    projection: pinhole
+
+  mid_range_70:
+    model: "Leopard LI-IMX728-9295-070H"       # source: Presentation 1.pptx, camera_calc.xlsx
+    sensor: "Sony IMX728, 8.4 MP, RGGB"
+    resolution: [3857, 2177]
+    hfov_deg: 70
+    vfov_deg: 47.25
+    projection: pinhole
+
+  fisheye_196:
+    # Not specified in the slides - chosen as a typical surround-view module
+    # (also used in NVIDIA DRIVE / Isaac Sim sensor assets).
+    model: "SENSING SG3S-ISX031C-GMSL2F (H190 lens)"
+    sensor: "Sony ISX031, 3 MP, RGGB"
+    resolution: [1920, 1536]
+    hfov_deg: 196
+    vfov_deg: 154
+    projection: fisheye
+
+  rear_wide_120:
+    # Not specified in the slides - same IMX728 family as the mid-range, 120° lens.
+    model: "Leopard LI-IMX728-9295-120H"
+    sensor: "Sony IMX728, 8.4 MP, RGGB"
+    resolution: [3857, 2177]
+    hfov_deg: 120
+    projection: pinhole
+
+# ---------------------------------------------------------------------------
+# Placements (vehicle frame). Estimated from the slide-1 overview:
+# grille (long-range), 2x windshield (mid-range, splayed ~20° outwards as on slide 3),
+# 2x door handle (fisheye), tailgate (rear).
+# ---------------------------------------------------------------------------
+cameras:
+  - name: long_range
+    camera_model: long_range_24
+    group: "Long-range"
+    position_m: [3.72, 0.00, 0.62]     # front grille
+    yaw_deg: 0
+    pitch_deg: 0
+    color: "#ff4d6d"
+
+  - name: mid_range_left
+    camera_model: mid_range_70
+    group: "Mid-range"
+    position_m: [1.60, 0.18, 1.30]     # windshield, left of centre
+    yaw_deg: 20
+    pitch_deg: 0
+    color: "#ffb703"
+
+  - name: mid_range_right
+    camera_model: mid_range_70
+    group: "Mid-range"
+    position_m: [1.60, -0.18, 1.30]    # windshield, right of centre
+    yaw_deg: -20
+    pitch_deg: 0
+    color: "#ffb703"
+
+  - name: fisheye_left
+    camera_model: fisheye_196
+    group: "Fisheye"
+    position_m: [1.20, 0.94, 0.95]     # left door handle
+    yaw_deg: 90
+    pitch_deg: -30
+    color: "#4cc9f0"
+
+  - name: fisheye_right
+    camera_model: fisheye_196
+    group: "Fisheye"
+    position_m: [1.20, -0.94, 0.95]    # right door handle
+    yaw_deg: -90
+    pitch_deg: -30
+    color: "#4cc9f0"
+
+  - name: rear
+    camera_model: rear_wide_120
+    group: "Rear"
+    position_m: [-1.15, 0.00, 0.90]    # tailgate
+    yaw_deg: 180
+    pitch_deg: -10
+    color: "#c77dff"
+
+trajectory:
+  # [lat, lon] waypoints; snapped to real roads with the public OSRM router
+  # (result cached in route_cache so the video is reproducible / offline).
+  waypoints:
+    - [47.4985, 19.0405]   # Clark Ádám tér, Budapest
+    - [47.5105, 19.0388]   # Bem rakpart, north
+  snap_to_roads: true
+  route_cache: data/route_cache.json
+  max_speed_kmh: 50
+  max_lateral_accel: 2.0   # m/s^2, slows down in curves
+  max_accel: 1.5
+  max_decel: 2.0
+
+render:
+  output: out/camera_setup_drive.mp4
+  width_px: 1920
+  height_px: 1080
+  fps: 30
+  playback_speed: 3.0      # 3x real time
+  title: "Surround camera setup — Skoda Superb"
+  map:
+    tile_url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+    attribution: "© OpenStreetMap contributors"
+    max_zoom: 19
+    user_agent: "camviz-sensor-visualiser/0.1"
+    cache_dir: data/tile_cache
+    # metres visible ahead of the car over video time [s]: starts close, then zooms out
+    ahead_keyframes: [[0, 90], [7, 330]]
+    zoom_out: 1.0           # scales the keyframe distances: 2.0 = see twice as far (CLI: --zoom-out)
+    behind_ratio: 0.25      # metres behind = ratio * metres ahead
+    darken: 0.55            # 0 = original colours, 1 = black
+    desaturate: 0.85
+    fill_alpha: 0.30
+  near_field_m: 14          # half size of the near-field coverage panel
+  far_field_m: 400          # forward extent of the range panel
+  pixel_distances_m: [10, 25, 50, 100, 200]

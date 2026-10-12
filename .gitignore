@@ -1,0 +1,15 @@
+# rendered output (videos, previews)
+out/
+*.mp4
+*.png
+*.jpg
+*.jpeg
+*.gif
+
+# downloaded map tiles
+data/tile_cache/
+
+# python
+__pycache__/
+*.pyc
+.venv/
