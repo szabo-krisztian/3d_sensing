@@ -163,7 +163,10 @@ render:
     darken: 0.55            # 0 = original colours, 1 = black
     desaturate: 0.85
     fill_alpha: 0.30
-  near_field_m: 14          # half size of the near-field coverage panel
+  near_field:               # near-field coverage panel extent (m from the car body)
+    side_m: 8
+    ahead_m: 17
+    behind_m: 8
   near_field_height_m: 0.0  # height of the evaluated points (0 = ground; e.g. 0.5 for low obstacles)
-  far_field_m: 400          # forward extent of the range panel
+  side_view: { x_min: -10, x_max: 30 }
   pixel_distances_m: [10, 25, 50, 100, 200]

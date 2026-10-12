@@ -67,25 +67,40 @@ def draw_car_top(ax, v, zorder=10, lw=1.0):
                                lw=lw * 0.6, zorder=zorder))
 
 
-def draw_resolution_wedges(ax, setup: Setup, ranges, max_alpha=0.3, n_rings=28, zorder=4,
+def draw_car_side(ax, v, zorder=10):
+    xf, xr, wb, h = v.x_front, v.x_rear, v.wheelbase_m, v.height_m
+    pts = [(xr + 0.05, 0.22), (xr, 0.55), (xr + 0.02, 0.95), (xr + 0.30, 1.02), (xr + 1.05, h - 0.02),
+           (xr + 1.35, h), (wb - 1.55, h), (wb - 0.65, 0.98), (xf - 0.15, 0.80), (xf, 0.62),
+           (xf - 0.05, 0.22)]
+    ax.add_patch(Polygon(pts, fc="#dfe6ee", ec="#0b0f14", lw=0.8, zorder=zorder))
+    for x in (0.0, wb):
+        ax.add_patch(plt.Circle((x, 0.34), 0.34, fc="#1f2329", ec="#0b0f14", zorder=zorder + 1))
+
+
+def draw_resolution_wedges(ax, setup: Setup, ranges, max_alpha=0.3, n_rings=30, zorder=4,
                            outline_fisheye=False, tier_arcs=True, lw=1.0):
-    """FOV wedges out to the detection range, fading with pixel density (pixels on target)."""
+    """FOV wedges out to the detection range, fading with pixel density (pixels on target).
+
+    Full colour up to the strictest tier (e.g. identification), then fading with
+    log(pixels on target) down to almost transparent at the detection range.
+    """
     for ci, cam in enumerate(setup.cameras):
         cx, cy = -cam.position[1], cam.position[0]
         a, half = _cam_angle(cam), cam.hfov_deg / 2
-        r_det = ranges[ci][0]
+        r_det, r_full = ranges[ci][0], ranges[ci][-1]
         fill = not (outline_fisheye and cam.projection == "fisheye")
         if fill:
-            # pixels on target ~ 1/d: alpha follows log(px / detection threshold)
-            edges = np.geomspace(max(r_det / 60, 0.3), r_det, n_rings + 1)
-            edges[0] = 0.0
+            ax.add_patch(Wedge((cx, cy), r_full, a - half, a + half,
+                               fc=to_rgba(cam.color, max_alpha), ec="none", zorder=zorder))
+            edges = np.linspace(r_full, r_det, n_rings + 1)
+            span = math.log(r_det / r_full) if r_det > r_full else 1.0
             for r0, r1 in zip(edges[:-1], edges[1:]):
-                frac = math.log(r_det / max(r1, 1e-3)) / math.log(60)
-                al = max_alpha * (0.15 + 0.85 * min(frac, 1.0))
+                frac = math.log(r_det / ((r0 + r1) / 2)) / span   # 1 at r_full, 0 at r_det
+                al = max_alpha * (0.06 + 0.94 * frac)
                 ax.add_patch(Wedge((cx, cy), r1, a - half, a + half, width=r1 - r0,
                                    fc=to_rgba(cam.color, al), ec="none", zorder=zorder))
         ax.add_patch(Wedge((cx, cy), r_det, a - half, a + half, fill=False,
-                           ec=to_rgba(cam.color, 0.85), lw=lw, ls="-" if fill else "--", zorder=zorder + 1))
+                           ec=to_rgba(cam.color, 0.5), lw=lw * 0.9, ls=(0, (5, 4)), zorder=zorder + 1))
         if tier_arcs:
             for r in ranges[ci][1:]:
                 ax.add_patch(Wedge((cx, cy), r, a - half, a + half, width=0, fill=False,
@@ -131,8 +146,11 @@ class Renderer:
         self._coslat0 = math.cos(lat0)
 
         self.nf_height = float(self.r.get("near_field_height_m", 0.0))
-        self.nf = optics.near_field_coverage(setup, float(self.r.get("near_field_m", 14)),
-                                             height=self.nf_height)
+        nf = self.r.get("near_field", {})
+        v = setup.vehicle
+        self.nf = optics.near_field_coverage(
+            setup, float(nf.get("side_m", 8)), height=self.nf_height,
+            x_range=(v.x_rear - float(nf.get("behind_m", 8)), v.x_front + float(nf.get("ahead_m", 17))))
 
     def log(self, *a):
         if self.verbose:
@@ -167,9 +185,9 @@ class Renderer:
                  color=MUTED, fontsize=10, va="center")
 
         self._build_map(fig.add_axes([0.008, 0.015, 0.555, 0.905]))
-        self._build_near(fig.add_axes([0.578, 0.475, 0.2, 0.445]))
-        self._build_far(fig.add_axes([0.79, 0.475, 0.2, 0.445]))
-        self._build_pixels(fig.add_axes([0.578, 0.015, 0.412, 0.39]))
+        self._build_side(fig.add_axes([0.578, 0.715, 0.412, 0.19]))
+        self._build_near(fig.add_axes([0.578, 0.015, 0.19, 0.645]))
+        self._build_pixels(fig.add_axes([0.785, 0.015, 0.205, 0.645]))
         return fig
 
     def _build_map(self, ax):
@@ -247,8 +265,8 @@ class Renderer:
     def _build_near(self, ax):
         v = self.setup.vehicle
         xs, ys, masks = self.nf
-        _style_axes(ax, "Near-field coverage — " + ("ground level" if self.nf_height == 0
-                                                     else f"{self.nf_height:g} m above ground"))
+        _style_axes(ax, "Near-field coverage\n" + ("at ground level" if self.nf_height == 0
+                                                    else f"{self.nf_height:g} m above ground"))
         count = masks.sum(0)
         rgba = np.array([to_rgba(COVERAGE_COLORS[min(c, len(COVERAGE_COLORS) - 1)], 0.85)
                          for c in range(count.max() + 1)])[count]
@@ -270,45 +288,67 @@ class Renderer:
         n = min(len(COVERAGE_COLORS), count.max() + 1)
         labels = ["blind"] + [f"{i} cam{'s' if i > 1 else ''}" for i in range(1, n)]
         handles = [Patch(fc=COVERAGE_COLORS[i], label=labels[i]) for i in range(n)]
-        ax.legend(handles=handles, loc="lower center", ncol=n, fontsize=7.5, framealpha=0.85,
+        ax.legend(handles=handles, loc="lower center", ncol=3, fontsize=7.5, framealpha=0.85,
                   facecolor=PANEL, edgecolor=GRID, labelcolor=FG, handlelength=1.0,
                   columnspacing=0.8, bbox_to_anchor=(0.5, -0.005))
 
-    def _build_far(self, ax):
-        far = float(self.r.get("far_field_m", 400))
-        _style_axes(ax, "Range by resolution")
-        draw_resolution_wedges(ax, self.setup, self.ranges, max_alpha=0.45, lw=0.9, zorder=3)
-        for r in (50, 100, 200, 300, 400, 600):
-            if r > far:
-                break
-            ax.add_patch(plt.Circle((0, 0), r, fill=False, ec=(1, 1, 1, 0.2), lw=0.6, ls="--", zorder=2))
-            ax.text(r * 0.42 + 3, r * 0.906, f"{r} m", color=MUTED, fontsize=7, zorder=6)
-        # detection-range labels on the forward / rearward cameras
+    def _build_side(self, ax):
+        """Side view: vertical FOV of the forward / rearward cameras and the first visible ground point."""
+        sv = self.r.get("side_view", {})
+        x0, x1 = float(sv.get("x_min", -10)), float(sv.get("x_max", 30))
+        v = self.setup.vehicle
+        _style_axes(ax, "Side view — vertical field of view and ground blind distance")
+        ax.axhline(0, color=MUTED, lw=1, zorder=1)
+        seen_groups, n_lbl = set(), 0
         for ci, cam in enumerate(self.setup.cameras):
-            r = self.ranges[ci][0]
-            if r < 60 or (abs(cam.yaw_deg) > 1 and abs(abs(cam.yaw_deg) - 180) > 1):
+            cy = math.cos(math.radians(cam.yaw_deg))
+            if abs(cy) < 0.9 or cam.group in seen_groups:
                 continue
-            a = math.radians(_cam_angle(cam))
-            rr = min(r, far * 0.96)
-            ax.text(rr * math.cos(a), rr * math.sin(a), f"{r:.0f} m" + (" ↑" if r > far else ""),
-                    color=cam.color, fontsize=8, fontweight="bold", zorder=8, ha="center", clip_on=True,
-                    va="top" if r > far else ("bottom" if math.sin(a) > 0 else "top"))
-        w = far * 0.6
-        ax.set_xlim(-w, w), ax.set_ylim(-far * 0.5, far)
-        ax.set_aspect("equal", adjustable="box")
-        ax.set_xticks([]), ax.set_yticks([])
-        ax.plot(0, 0, marker=(3, 0, 0), ms=7, color="white", zorder=10)
-        t = self.setup.tiers
-        ax.text(0.97, 0.03, f"pedestrian ({self.setup.target_height_m:g} m) height in pixels\n"
-                f"solid edge: {t[0].min_pixels:g} px ({t[0].name})" +
-                "".join(f"\ndotted: {x.min_pixels:g} px ({x.name})" for x in t[1:]),
-                transform=ax.transAxes, color=MUTED, fontsize=7, va="bottom", ha="right", zorder=9,
-                bbox=dict(fc=PANEL, ec=GRID, alpha=0.85, boxstyle="round,pad=0.4"))
+            seen_groups.add(cam.group)
+            sgn = 1 if cy > 0 else -1
+            px, pz = cam.position[0], cam.position[2]
+            lim = x1 if sgn > 0 else x0
+            half = min(cam.vfov_deg / 2, 89)
+
+            def ray_end(el_deg):
+                e = math.radians(el_deg)
+                z = pz + abs(lim - px) * math.tan(e)
+                if z >= 0:
+                    return (lim, z), False
+                return (px + sgn * pz / math.tan(-e), 0.0), True
+
+            up, up_ground = ray_end(cam.pitch_deg + half)
+            lo, lo_ground = ray_end(cam.pitch_deg - half)
+            poly = [(px, pz), lo] + ([(lim, 0.0)] if lo_ground and not up_ground else []) + [up]
+            ax.add_patch(Polygon(poly, closed=True, fc=to_rgba(cam.color, 0.16),
+                                 ec=to_rgba(cam.color, 0.85), lw=1.0, zorder=3))
+            ax.plot(px, pz, "o", ms=5, mfc=cam.color, mec="black", mew=0.6, zorder=12)
+            # first visible ground point along the viewing direction (occlusion-aware)
+            s_ = np.arange(0.0, 40.0, 0.05)
+            yaw = math.radians(cam.yaw_deg)
+            pts = np.column_stack([px + s_ * math.cos(yaw), cam.position[1] + s_ * math.sin(yaw),
+                                   np.zeros_like(s_)])
+            vis = optics.ground_visibility(cam, v, pts, self.ranges[ci][0])
+            if vis.any():
+                gx = pts[np.argmax(vis), 0]
+                gap = max(gx - v.x_front if sgn > 0 else v.x_rear - gx, 0.0)
+                ax.annotate("", xy=(gx, 0.05), xytext=(v.x_front if sgn > 0 else v.x_rear, 0.05),
+                            arrowprops=dict(arrowstyle="<->", color=cam.color, lw=1.2), zorder=7)
+                ax.text(gx + sgn * 0.3, -0.35 - 0.75 * (n_lbl % 2), f"{cam.group}: {gap:.1f} m",
+                        color=cam.color, fontsize=8, ha="left" if sgn > 0 else "right", va="top",
+                        zorder=7, fontweight="bold")
+                n_lbl += 1
+        draw_car_side(ax, v, zorder=10)
+        ax.set_xlim(x0, x1), ax.set_ylim(-2.0, 6.0)
+        ax.set_aspect("equal", adjustable="box", anchor="N")
+        ax.set_yticks([0, 2, 4])
+        ax.set_xticks(range(int(x0), int(x1) + 1, 5))
+        ax.set_xticklabels([f"{t} m" for t in range(int(x0), int(x1) + 1, 5)])
 
     def _build_pixels(self, ax):
-        """'What a pedestrian looks like': pixelated silhouettes at their true pixel size."""
-        _style_axes(ax, f"Pixel resolution — pedestrian ({self.setup.target_height_m:g} m) "
-                        "as seen by each camera")
+        """'What a pedestrian looks like': pixelated silhouettes at their true pixel size.
+        One column per camera group, one row per distance."""
+        _style_axes(ax, f"Pixel resolution\npedestrian ({self.setup.target_height_m:g} m) per camera")
         ax.set_facecolor(BG)
         for s in ax.spines.values():
             s.set_visible(False)
@@ -317,37 +357,43 @@ class Renderer:
         mask = pedestrian_mask()
         aspect = mask.shape[1] / mask.shape[0]
         th = self.setup.target_height_m
-        label_w, col_w, row_h, fig_h = 2.2, 1.0, 1.0, 0.70
+        label_w, col_w, row_h, head_h, fig_h = 0.8, 1.0, 1.0, 0.9, 0.62
+        xspan, yspan = label_w + len(groups) * col_w, head_h + len(dists) * row_h
+        bbox = ax.get_position()
+        ux, uy = bbox.width * self.W / xspan, bbox.height * self.H / yspan   # px per data unit
+        hw = fig_h * uy * aspect / ux / 2
 
         for gi, (name, cams) in enumerate(groups):
             cam = cams[0]
-            y0 = (len(groups) - 1 - gi) * row_h
-            fy = optics.focal_px(cam)
-            ax.text(0.05, y0 + 0.52, name, color=cam.color, fontsize=10.5, fontweight="bold", va="bottom")
-            ax.text(0.05, y0 + 0.47, f"{cam.resolution[0]}×{cam.resolution[1]} · {cam.hfov_deg:g}°",
-                    color=MUTED, fontsize=8, va="top")
+            cx = label_w + gi * col_w + col_w / 2
+            top = len(dists) * row_h
+            ax.text(cx, top + 0.55, name, color=cam.color, fontsize=9, fontweight="bold",
+                    ha="center", va="bottom")
+            ax.text(cx, top + 0.5, f"{cam.resolution[0]}×{cam.resolution[1]}\n{cam.hfov_deg:g}°",
+                    color=MUTED, fontsize=7, ha="center", va="top")
+            f = optics.focal_px(cam)
             for di, d in enumerate(dists):
-                px = fy * th / d
+                y0 = (len(dists) - 1 - di) * row_h
+                px = f * th / d
                 n = max(1, int(round(px)))
-                small = np.asarray(Image.fromarray((mask * 255).astype(np.uint8)).resize(
-                    (max(1, int(round(n * aspect))), n), Image.BOX), dtype=float) / 255
-                h_disp = 240
-                big = np.asarray(Image.fromarray((small * 255).astype(np.uint8)).resize(
-                    (int(h_disp * aspect), h_disp), Image.NEAREST), dtype=float) / 255
+                small = Image.fromarray((mask * 255).astype(np.uint8)).resize(
+                    (max(1, int(round(n * aspect))), n), Image.BOX)
+                big = np.asarray(small.resize((int(240 * aspect), 240), Image.NEAREST), dtype=float) / 255
                 rgba = np.zeros(big.shape + (4,))
                 rgba[..., :3] = to_rgba(cam.color)[:3]
                 rgba[..., 3] = big
-                cx = label_w + di * col_w + col_w / 2
-                hw = fig_h * aspect / 2 * 1.0
-                ax.imshow(rgba, extent=(cx - hw, cx + hw, y0 + 0.2, y0 + 0.2 + fig_h),
+                ax.imshow(rgba, extent=(cx - hw, cx + hw, y0 + 0.28, y0 + 0.28 + fig_h),
                           interpolation="nearest", zorder=3)
-                ax.text(cx, y0 + 0.16, f"{px:.0f} px", color=FG if round(px) >= self.setup.tiers[0].min_pixels
-                        else COVERAGE_COLORS[0], fontsize=8.5, ha="center", va="top")
+                ok = round(px) >= self.setup.tiers[0].min_pixels
+                ax.text(cx, y0 + 0.24, f"{px:.0f} px", color=FG if ok else COVERAGE_COLORS[0],
+                        fontsize=8, ha="center", va="top")
         for di, d in enumerate(dists):
-            ax.text(label_w + di * col_w + col_w / 2, len(groups) * row_h + 0.02, f"{d:g} m",
-                    color=MUTED, fontsize=9, ha="center", va="bottom", fontweight="bold")
-        ax.set_xlim(0, label_w + len(dists) * col_w)
-        ax.set_ylim(-0.05, len(groups) * row_h + 0.22)
+            y0 = (len(dists) - 1 - di) * row_h
+            ax.text(0.05, y0 + 0.55, f"{d:g} m", color=MUTED, fontsize=9, fontweight="bold",
+                    ha="left", va="center")
+        ax.set_aspect("auto")
+        ax.set_xlim(0, xspan)
+        ax.set_ylim(-0.05, yspan)
         ax.set_xticks([]), ax.set_yticks([])
 
     # ------------------------------------------------------------------ frames

@@ -76,13 +76,15 @@ def ground_visibility(cam: Camera, vehicle: Vehicle, pts: np.ndarray, max_range:
     return out
 
 
-def near_field_coverage(setup: Setup, half_size: float, res: float = 0.08, height: float = 0.0):
+def near_field_coverage(setup: Setup, half_size: float, res: float = 0.08, height: float = 0.0,
+                        x_range: tuple[float, float] | None = None):
     """Per-camera visibility of points at `height` (0 = ground) on a grid centred on the vehicle.
 
     Returns (xs, ys, masks[n_cam, ny, nx]) in vehicle coordinates.
     """
     v = setup.vehicle
-    xs = np.arange(v.x_center - half_size, v.x_center + half_size + res, res)
+    x0, x1 = x_range or (v.x_center - half_size, v.x_center + half_size)
+    xs = np.arange(x0, x1 + res, res)
     ys = np.arange(-half_size, half_size + res, res)
     gx, gy = np.meshgrid(xs, ys)
     pts = np.column_stack([gx.ravel(), gy.ravel(), np.full(gx.size, height)])
