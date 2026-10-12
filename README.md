@@ -14,11 +14,20 @@ OpenStreetMap, showing:
 Ranges are derived from resolution: the distance at which a target of `target_height_m`
 spans `min_pixels` vertical pixels (`range = f_px * H / N`, at the image centre).
 
+**Lens model:** when the datasheet gives `efl_mm` and `pixel_size_um`, the focal length
+`f_px = EFL / pixel` sets the true centre resolution. A one-parameter radial model,
+`r = f·tan(aθ)/a` (pinhole) through `r = f·θ` (equidistant) to `r = f·sin(|a|θ)/|a|`,
+is fitted so that the stated HFOV lands exactly on the sensor edge. That captures the
+barrel distortion of wide lenses. Without an EFL, the code falls back to a pure pinhole
+or equidistant fisheye model derived from the HFOV. The VFOV is always derived (square
+pixels), and `report` warns when a spec's VFOV is inconsistent.
+
 ## Usage
 
 ```bash
 pip install -r requirements.txt          # numpy, matplotlib, pillow, pyyaml, requests (+ ffmpeg)
-python3 -m camviz report                 # print ranges / blind gaps
+python3 -m camviz report                 # print lens model, ranges, spec warnings, blind gaps
+python3 tests/verify_geometry.py         # numerical checks of the projection / map geometry
 python3 -m camviz preview --time 60      # single frame -> out/preview.png
 python3 -m camviz render                 # full video -> out/camera_setup_drive.mp4
 python3 -m camviz render --max-seconds 5 --out out/test.mp4

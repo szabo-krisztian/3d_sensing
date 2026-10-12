@@ -14,14 +14,24 @@ DEFAULT_CONFIG = Path(__file__).resolve().parent.parent / "config" / "skoda_supe
 def cmd_report(setup, _args):
     tiers = setup.tiers
     print(f"{setup.vehicle.name} - target height {setup.target_height_m} m")
-    head = f"{'camera':18} {'resolution':>11} {'HFOV':>6} {'VFOV':>6} {'px/deg':>7} " + \
-        " ".join(f"{t.name[:10]:>10}" for t in tiers)
+    head = (f"{'camera':16} {'resolution':>11} {'HFOV':>6} {'VFOV':>6} {'f [px]':>7} {'EFL':>7} "
+            f"{'lens':>14} {'px/deg':>7} " + " ".join(f"{t.name[:10]:>10}" for t in tiers))
     print(head)
     print("-" * len(head))
     for c in setup.cameras:
         rs = optics.camera_ranges(setup, c)
-        print(f"{c.name:18} {c.resolution[0]:>5}x{c.resolution[1]:<5} {c.hfov_deg:6.1f} {c.vfov_deg:6.1f} "
-              f"{optics.px_per_deg(c):7.1f} " + " ".join(f"{r:9.0f}m" for r in rs))
+        efl = f"{c.efl_mm:.2f}mm" if c.efl_mm else (
+            f"({c.f_px * c.pixel_size_um / 1000:.2f})" if c.pixel_size_um else "-")
+        kind = ("pinhole" if c.lens_a > 0.999 else "equidistant" if abs(c.lens_a) < 1e-6
+                else f"barrel a={c.lens_a:+.2f}")
+        print(f"{c.name:16} {c.resolution[0]:>5}x{c.resolution[1]:<5} {c.hfov_deg:6.1f} {c.vfov_deg:6.1f} "
+              f"{c.f_px:7.0f} {efl:>7} {kind:>14} {optics.px_per_deg(c):7.1f} "
+              + " ".join(f"{r:9.0f}m" for r in rs))
+    warned = [(c.name, w) for c in setup.cameras for w in c.warnings]
+    if warned:
+        print("\nspec warnings:")
+        for n, w in dict.fromkeys(warned):
+            print(f"  {n}: {w}")
     xs, ys, masks = optics.near_field_coverage(setup, 14)
     print("\nnear-field blind gap (closest visible ground point to the body):")
     for c, mk in zip(setup.cameras, masks):

@@ -5,25 +5,23 @@ import math
 
 import numpy as np
 
+from . import lens
 from .config import Camera, Setup, Vehicle
 
 
-def focal_px(cam: Camera) -> tuple[float, float]:
-    w, h = cam.resolution
-    hh, vh = math.radians(cam.hfov_deg) / 2, math.radians(cam.vfov_deg) / 2
-    if cam.projection == "fisheye":
-        return (w / 2) / hh, (h / 2) / vh
-    return (w / 2) / math.tan(hh), (h / 2) / math.tan(vh)
+def focal_px(cam: Camera) -> float:
+    """Focal length in pixels: sets the resolution at the image centre."""
+    return cam.f_px
 
 
 def px_per_deg(cam: Camera) -> float:
     """Angular resolution at the image centre."""
-    return focal_px(cam)[0] * math.pi / 180
+    return cam.f_px * math.pi / 180
 
 
 def tier_range(cam: Camera, target_height_m: float, min_pixels: float) -> float:
     """Distance at which a target of the given height spans `min_pixels` (image centre)."""
-    r = focal_px(cam)[1] * target_height_m / min_pixels
+    r = cam.f_px * target_height_m / min_pixels
     return min(r, cam.max_range_m) if cam.max_range_m else r
 
 
@@ -37,22 +35,17 @@ def project(cam: Camera, d: np.ndarray):
     Returns (u, v, valid); u to the right, v up.
     """
     dc = d @ cam.rotation          # == (R^T d^T)^T: vehicle -> camera
-    a, x_img, y_img = dc[:, 0], -dc[:, 1], dc[:, 2]
-    fx, fy = focal_px(cam)
+    x_img, y_img = -dc[:, 1], dc[:, 2]
     w, h = cam.resolution
     with np.errstate(divide="ignore", invalid="ignore"):
-        if cam.projection == "pinhole":
-            front = a > 1e-6
-            u = np.where(front, fx * x_img / a, np.inf)
-            v = np.where(front, fy * y_img / a, np.inf)
-        else:
-            n = np.linalg.norm(dc, axis=1)
-            theta = np.arccos(np.clip(a / n, -1, 1))
-            rho = np.hypot(x_img, y_img)
-            rho = np.where(rho < 1e-12, 1.0, rho)
-            u = fx * theta * x_img / rho
-            v = fy * theta * y_img / rho
-    valid = (np.abs(u) <= w / 2) & (np.abs(v) <= h / 2)
+        theta = np.arccos(np.clip(dc[:, 0] / np.linalg.norm(dc, axis=1), -1, 1))
+        ok = theta < lens.theta_max(cam.lens_a)
+        r = np.where(ok, cam.f_px * lens.g(np.where(ok, theta, 0.0), cam.lens_a), np.inf)
+        rho = np.hypot(x_img, y_img)
+        rho = np.where(rho < 1e-12, 1.0, rho)
+        u = r * x_img / rho
+        v = r * y_img / rho
+    valid = ok & (np.abs(u) <= w / 2) & (np.abs(v) <= h / 2)
     return u, v, valid
 
 
@@ -83,8 +76,8 @@ def ground_visibility(cam: Camera, vehicle: Vehicle, pts: np.ndarray, max_range:
     return out
 
 
-def near_field_coverage(setup: Setup, half_size: float, res: float = 0.08):
-    """Per-camera ground visibility on a grid centred on the vehicle.
+def near_field_coverage(setup: Setup, half_size: float, res: float = 0.08, height: float = 0.0):
+    """Per-camera visibility of points at `height` (0 = ground) on a grid centred on the vehicle.
 
     Returns (xs, ys, masks[n_cam, ny, nx]) in vehicle coordinates.
     """
@@ -92,7 +85,7 @@ def near_field_coverage(setup: Setup, half_size: float, res: float = 0.08):
     xs = np.arange(v.x_center - half_size, v.x_center + half_size + res, res)
     ys = np.arange(-half_size, half_size + res, res)
     gx, gy = np.meshgrid(xs, ys)
-    pts = np.column_stack([gx.ravel(), gy.ravel(), np.zeros(gx.size)])
+    pts = np.column_stack([gx.ravel(), gy.ravel(), np.full(gx.size, height)])
     masks = np.stack([
         ground_visibility(c, v, pts, camera_ranges(setup, c)[0]).reshape(gx.shape)
         for c in setup.cameras

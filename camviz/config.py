@@ -8,6 +8,8 @@ from pathlib import Path
 import numpy as np
 import yaml
 
+from . import lens
+
 
 @dataclass
 class Vehicle:
@@ -38,13 +40,21 @@ class Vehicle:
 
     def body_boxes(self) -> list[np.ndarray]:
         """Coarse occlusion model as [[xmin,ymin,zmin],[xmax,ymax,zmax]] boxes:
-        bumpers, hood/trunk (shoulder line), cabin."""
+        bumpers, body up to the shoulder line, a hood sloping down in steps, cabin."""
         hw = self.width_m / 2
-        lower = np.array([[self.x_rear, -hw, 0.12], [self.x_front, hw, 0.72]])
-        shoulder = np.array([[self.x_rear + 0.25, -hw + 0.05, 0.72], [self.x_front - 0.35, hw - 0.05, 0.92]])
-        cabin = np.array([[self.x_rear + 0.8, -hw + 0.2, 0.92],
-                          [self.wheelbase_m - 1.4, hw - 0.2, self.height_m]])
-        return [lower, shoulder, cabin]
+        hood_start = self.wheelbase_m - 0.65          # windshield base
+        boxes = [
+            [[self.x_rear, -hw, 0.12], [self.x_front, hw, 0.72]],                     # bumpers / lower body
+            [[self.x_rear + 0.25, -hw + 0.05, 0.72], [hood_start, hw - 0.05, 0.95]],  # trunk + beltline
+            [[self.x_rear + 0.8, -hw + 0.2, 0.95], [self.wheelbase_m - 1.4, hw - 0.2, self.height_m]],
+        ]
+        # hood: 0.92 m at the windshield base down to 0.80 m near the front edge
+        steps = [(0.92, 0.0, 0.40), (0.86, 0.40, 0.75), (0.80, 0.75, 1.0)]
+        hood_len = self.x_front - 0.2 - hood_start
+        for top, f0, f1 in steps:
+            boxes.append([[hood_start + f0 * hood_len, -hw + 0.05, 0.72],
+                          [hood_start + f1 * hood_len, hw - 0.05, top]])
+        return [np.array(b) for b in boxes]
 
 
 @dataclass
@@ -63,6 +73,12 @@ class Camera:
     color: str
     group: str = ""
     max_range_m: float | None = None
+    efl_mm: float | None = None
+    pixel_size_um: float | None = None
+    vfov_spec_deg: float | None = None   # VFOV as written in the spec (vfov_deg is derived)
+    f_px: float = 0.0                    # focal length in pixels (image centre)
+    lens_a: float = 1.0                  # lens shape, see lens.py
+    warnings: list = field(default_factory=list)
 
     @property
     def rotation(self) -> np.ndarray:
@@ -107,12 +123,6 @@ class Setup:
         return p if p.is_absolute() else self.base_dir / p
 
 
-def _derive_vfov(hfov: float, w: int, h: int, projection: str) -> float:
-    if projection == "fisheye":
-        return hfov * h / w
-    return math.degrees(2 * math.atan(math.tan(math.radians(hfov) / 2) * h / w))
-
-
 def load_setup(path: str | Path) -> Setup:
     path = Path(path).resolve()
     raw = yaml.safe_load(path.read_text())
@@ -134,13 +144,37 @@ def load_setup(path: str | Path) -> Setup:
         if proj == "pinhole" and c["hfov_deg"] >= 180:
             raise ValueError(f"{c['name']}: pinhole cannot have hfov >= 180, use 'fisheye'")
         w, h = c["resolution"]
+        hfov = float(c["hfov_deg"])
+        half = math.radians(hfov) / 2
+        warnings = []
+        efl, pix = c.get("efl_mm"), c.get("pixel_size_um")
+        if efl and pix:
+            f_px = efl * 1000.0 / pix
+            a, warn = lens.fit_shape(f_px, w / 2, half)
+            if warn:
+                warnings.append(warn)
+        elif proj == "pinhole":
+            f_px, a = (w / 2) / math.tan(half), 1.0
+        else:
+            f_px, a = (w / 2) / half, 0.0
+        vfov = 2 * math.degrees(lens.g_inv((h / 2) / f_px, a))
+        vfov_spec = c.get("vfov_deg")
+        if vfov_spec and abs(vfov_spec - vfov) > max(1.0, 0.05 * vfov):
+            warnings.append(f"spec VFOV {vfov_spec:g}° is inconsistent with HFOV/resolution "
+                            f"(square pixels give {vfov:.1f}°); using {vfov:.1f}°")
         cameras.append(Camera(
             name=c["name"],
             type=c.get("type", ""),
             model=c.get("model", ""),
             resolution=(int(w), int(h)),
-            hfov_deg=float(c["hfov_deg"]),
-            vfov_deg=float(c.get("vfov_deg") or _derive_vfov(c["hfov_deg"], w, h, proj)),
+            hfov_deg=hfov,
+            vfov_deg=vfov,
+            efl_mm=efl,
+            pixel_size_um=pix,
+            vfov_spec_deg=vfov_spec,
+            f_px=f_px,
+            lens_a=a,
+            warnings=warnings,
             projection=proj,
             position=np.asarray(c["position_m"], dtype=float),
             yaw_deg=float(c.get("yaw_deg", 0)),

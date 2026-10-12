@@ -6,6 +6,8 @@
 #                     pitch[deg] positive = look up, negative = look down
 #                     roll [deg] around the optical axis
 # projection: pinhole | fisheye  (fisheye = equidistant model, r = f * theta)
+# If efl_mm and pixel_size_um are given, the focal length in pixels comes from them
+# (true centre resolution) and lens distortion is fitted to match the HFOV.
 # A camera takes its specs from `camera_models[camera_model]`; any field can be overridden per camera.
 # vfov_deg is optional: derived from the aspect ratio if omitted.
 # max_range_m is optional: caps the resolution-derived ranges (e.g. lens/ISP limit).
@@ -38,16 +40,19 @@ camera_models:
     model: "SENSING SG17-IMX735C-G3A"          # source: Presentation 1.pptx, camera_calc.xlsx
     sensor: "Sony IMX735, 17.4 MP, RGGB"
     resolution: [5760, 3000]
-    hfov_deg: 24
-    vfov_deg: 16.2
-    projection: pinhole
+    pixel_size_um: 2.1                         # Sony IMX735 datasheet
+    hfov_deg: 24                               # slides (SENSING page lists 26° for this module)
+    vfov_deg: 16.2                             # slides - inconsistent with 24° on 5760x3000, see report
+    projection: pinhole                        # no EFL published: f derived from HFOV
 
   mid_range_70:
     model: "Leopard LI-IMX728-9295-070H"       # source: Presentation 1.pptx, camera_calc.xlsx
     sensor: "Sony IMX728, 8.4 MP, RGGB"
     resolution: [3857, 2177]
+    pixel_size_um: 2.1                         # Leopard LI-IMX728-9295 datasheet
+    efl_mm: 6.7                                # datasheet
     hfov_deg: 70
-    vfov_deg: 47.25
+    vfov_deg: 47.25                            # camera_calc.xlsx
     projection: pinhole
 
   fisheye_196:
@@ -56,16 +61,19 @@ camera_models:
     model: "SENSING SG3S-ISX031C-GMSL2F (H190 lens)"
     sensor: "Sony ISX031, 3 MP, RGGB"
     resolution: [1920, 1536]
+    pixel_size_um: 3.0                         # Sony ISX031
     hfov_deg: 196
     vfov_deg: 154
-    projection: fisheye
+    projection: fisheye                        # no EFL published: equidistant model from HFOV
 
   rear_wide_120:
     # Not specified in the slides - same IMX728 family as the mid-range, 120° lens.
     model: "Leopard LI-IMX728-9295-120H"
     sensor: "Sony IMX728, 8.4 MP, RGGB"
     resolution: [3857, 2177]
-    hfov_deg: 120
+    pixel_size_um: 2.1                         # datasheet
+    efl_mm: 3.9                                # datasheet
+    hfov_deg: 121.2                            # datasheet (measured)
     projection: pinhole
 
 # ---------------------------------------------------------------------------
@@ -156,5 +164,6 @@ render:
     desaturate: 0.85
     fill_alpha: 0.30
   near_field_m: 14          # half size of the near-field coverage panel
+  near_field_height_m: 0.0  # height of the evaluated points (0 = ground; e.g. 0.5 for low obstacles)
   far_field_m: 400          # forward extent of the range panel
   pixel_distances_m: [10, 25, 50, 100, 200]

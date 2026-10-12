@@ -130,7 +130,9 @@ class Renderer:
         self._north = np.radians(self.traj.lat) * EARTH_R
         self._coslat0 = math.cos(lat0)
 
-        self.nf = optics.near_field_coverage(setup, float(self.r.get("near_field_m", 14)))
+        self.nf_height = float(self.r.get("near_field_height_m", 0.0))
+        self.nf = optics.near_field_coverage(setup, float(self.r.get("near_field_m", 14)),
+                                             height=self.nf_height)
 
     def log(self, *a):
         if self.verbose:
@@ -191,6 +193,17 @@ class Renderer:
                                    solid_capstyle="round")
         draw_resolution_wedges(ax, self.setup, self.ranges, max_alpha=self.fill_alpha,
                                outline_fisheye=False, tier_arcs=False)
+        # ground-level blind zone around the car (same data as the near-field panel); the
+        # wedges above are horizontal-only and ignore vertical FOV and body occlusion
+        xs, ys, masks = self.nf
+        v = self.setup.vehicle
+        gx, gy = np.meshgrid(xs, ys)
+        on_car = (gx >= v.x_rear) & (gx <= v.x_front) & (np.abs(gy) <= v.width_m / 2)
+        blind = (masks.sum(0) == 0) & ~on_car
+        rgba = np.zeros(blind.shape + (4,))
+        rgba[blind] = to_rgba(COVERAGE_COLORS[0], 0.75)
+        ax.imshow(rgba.transpose(1, 0, 2)[:, ::-1], origin="lower",
+                  extent=(-ys[-1], -ys[0], xs[0], xs[-1]), interpolation="nearest", zorder=6)
         draw_car_top(ax, self.setup.vehicle, zorder=20, lw=0.6)
         self.car_marker, = ax.plot([0], [1.3], marker=(3, 0, 0), ms=11, color="white", mec="black",
                                    zorder=21, alpha=0)
@@ -234,7 +247,8 @@ class Renderer:
     def _build_near(self, ax):
         v = self.setup.vehicle
         xs, ys, masks = self.nf
-        _style_axes(ax, "Near-field coverage")
+        _style_axes(ax, "Near-field coverage — " + ("ground level" if self.nf_height == 0
+                                                     else f"{self.nf_height:g} m above ground"))
         count = masks.sum(0)
         rgba = np.array([to_rgba(COVERAGE_COLORS[min(c, len(COVERAGE_COLORS) - 1)], 0.85)
                          for c in range(count.max() + 1)])[count]
@@ -279,8 +293,8 @@ class Renderer:
             ax.text(rr * math.cos(a), rr * math.sin(a), f"{r:.0f} m" + (" ↑" if r > far else ""),
                     color=cam.color, fontsize=8, fontweight="bold", zorder=8, ha="center", clip_on=True,
                     va="top" if r > far else ("bottom" if math.sin(a) > 0 else "top"))
-        w = far * 0.55
-        ax.set_xlim(-w, w), ax.set_ylim(-far * 0.42, far)
+        w = far * 0.6
+        ax.set_xlim(-w, w), ax.set_ylim(-far * 0.5, far)
         ax.set_aspect("equal", adjustable="box")
         ax.set_xticks([]), ax.set_yticks([])
         ax.plot(0, 0, marker=(3, 0, 0), ms=7, color="white", zorder=10)
@@ -308,7 +322,7 @@ class Renderer:
         for gi, (name, cams) in enumerate(groups):
             cam = cams[0]
             y0 = (len(groups) - 1 - gi) * row_h
-            fy = optics.focal_px(cam)[1]
+            fy = optics.focal_px(cam)
             ax.text(0.05, y0 + 0.52, name, color=cam.color, fontsize=10.5, fontweight="bold", va="bottom")
             ax.text(0.05, y0 + 0.47, f"{cam.resolution[0]}×{cam.resolution[1]} · {cam.hfov_deg:g}°",
                     color=MUTED, fontsize=8, va="top")
@@ -327,7 +341,7 @@ class Renderer:
                 hw = fig_h * aspect / 2 * 1.0
                 ax.imshow(rgba, extent=(cx - hw, cx + hw, y0 + 0.2, y0 + 0.2 + fig_h),
                           interpolation="nearest", zorder=3)
-                ax.text(cx, y0 + 0.16, f"{px:.0f} px", color=FG if px >= self.setup.tiers[0].min_pixels
+                ax.text(cx, y0 + 0.16, f"{px:.0f} px", color=FG if round(px) >= self.setup.tiers[0].min_pixels
                         else COVERAGE_COLORS[0], fontsize=8.5, ha="center", va="top")
         for di, d in enumerate(dists):
             ax.text(label_w + di * col_w + col_w / 2, len(groups) * row_h + 0.02, f"{d:g} m",
@@ -415,10 +429,13 @@ class Renderer:
         out.parent.mkdir(parents=True, exist_ok=True)
         writer = FFMpegWriter(fps=fps, codec="libx264", bitrate=12000,
                               extra_args=["-pix_fmt", "yuv420p", "-preset", "medium"])
-        with writer.saving(self.fig, str(out), self.dpi):
+        # write to a temporary file so an interrupted render never clobbers the last good video
+        tmp = out.with_name(out.stem + ".part" + out.suffix)
+        with writer.saving(self.fig, str(tmp), self.dpi):
             for i, (ts, tv) in enumerate(times):
                 self.update(ts, tv)
                 writer.grab_frame(facecolor=BG)
                 if i % 100 == 0:
                     self.log(f"frame {i}/{len(times)}")
+        tmp.replace(out)
         self.log(f"wrote {out}")
