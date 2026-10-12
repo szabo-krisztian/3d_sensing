@@ -1,54 +1,37 @@
-# camviz — camera setup FOV / range video
+# camviz
 
-Renders a presentation video (MP4, 1080p) of a vehicle camera setup driving a real route on
-OpenStreetMap, showing:
+Renders a 1080p presentation video of the Skoda Superb camera setup driving a real
+OpenStreetMap route, showing each camera's FOV, range and pixel resolution.
 
-- **Map chase view** (heading-up; it zooms out from ~90 m to ~330 m at the start). Every
-  camera's FOV is drawn out to its detection range and fades as pixel density drops.
-- **Near-field coverage**: how many cameras see each ground cell around the car,
-  including occlusion by a coarse car body model, so blind spots appear in red.
-- **Range by resolution**: top view; solid edge = 20 px on a pedestrian, dotted = 50 / 120 px.
-- **Pixel resolution**: a pedestrian rendered at its true pixel height for each camera
-  at 10–200 m, so you can see the pixelation.
-
-Ranges are derived from resolution: the distance at which a target of `target_height_m`
-spans `min_pixels` vertical pixels (`range = f_px * H / N`, at the image centre).
-
-**Lens model:** when the datasheet gives `efl_mm` and `pixel_size_um`, the focal length
-`f_px = EFL / pixel` sets the true centre resolution. A one-parameter radial model,
-`r = f·tan(aθ)/a` (pinhole) through `r = f·θ` (equidistant) to `r = f·sin(|a|θ)/|a|`,
-is fitted so that the stated HFOV lands exactly on the sensor edge. That captures the
-barrel distortion of wide lenses. Without an EFL, the code falls back to a pure pinhole
-or equidistant fisheye model derived from the HFOV. The VFOV is always derived (square
-pixels), and `report` warns when a spec's VFOV is inconsistent.
-
-## Usage
+## Render
 
 ```bash
-pip install -r requirements.txt          # numpy, matplotlib, pillow, pyyaml, requests (+ ffmpeg)
-python3 -m camviz report                 # print lens model, ranges, spec warnings, blind gaps
-python3 tests/verify_geometry.py         # numerical checks of the projection / map geometry
-python3 -m camviz preview --time 60      # single frame -> out/preview.png
-python3 -m camviz render                 # full video -> out/camera_setup_drive.mp4
-python3 -m camviz render --max-seconds 5 --out out/test.mp4
-python3 -m camviz --zoom-out 1.5 render  # map shows 1.5x further (also: render.map.zoom_out)
-python3 -m camviz --config my_setup.yaml render
+pip install -r requirements.txt     # also needs ffmpeg
+python3 -m camviz --zoom-out 1.5 render
 ```
 
-## Configuring
+The output is `out/camera_setup_drive.mp4`. A render takes about 15 minutes. The first run
+needs internet access to download the map tiles.
 
-Edit `config/skoda_superb_setup.yaml`:
+Quick checks before a full render:
 
-- `camera_models`: the spec catalog (model, resolution, HFOV/VFOV, `pinhole`/`fisheye`).
-- `cameras`: placements. Each references a model and gives its mount position and
-  yaw/pitch/roll in the ISO 8855 vehicle frame (origin at the centre of the rear axle,
-  x forward, y left, z up). Any model field can be overridden per camera.
+```bash
+python3 -m camviz preview --time 60       # one frame -> out/preview.png
+python3 -m camviz report                  # ranges and spec warnings
+```
 
-Long-range and mid-range specs come from the slides and spreadsheet. The fisheye
-(SENSING SG3S-ISX031C-GMSL2F) and rear (Leopard LI-IMX728-9295-120H) models are
-assumptions, because the slides do not specify them. Mount positions are estimated
-from the slide-1 overview.
+## Important files
 
-The route is set by `trajectory.waypoints` (lat/lon). These are snapped to roads with the
-public OSRM router and cached in `data/route_cache.json`. Map tiles are cached in
-`data/tile_cache/`. After the first run, everything works offline.
+| File | What it is |
+|---|---|
+| `config/skoda_superb_setup.yaml` | **Edit this.** Camera models, mount positions, route, video settings |
+| `camviz/optics.py`, `camviz/lens.py` | Projection, lens model, range calculation |
+| `camviz/render.py` | Video layout and drawing |
+| `tests/verify_geometry.py` | Numerical checks of the geometry |
+
+Positions in the config use the vehicle frame: origin at the centre of the rear axle,
+x forward, y left, z up, in metres. Range is the distance at which a 1.75 m pedestrian
+still spans 20 px (detection), 50 px (recognition) or 120 px (identification).
+
+The fisheye and rear camera models are assumptions, and the mount positions are
+estimated from the slides.
