@@ -1,4 +1,4 @@
-# Camera sensor setup visualisation config.
+# Camera sensor setup visualisation config
 #
 # Vehicle frame (ISO 8855): origin = rear axle centre on the ground,
 #   x forward, y left, z up, metres.
